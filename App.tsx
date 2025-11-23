@@ -45,8 +45,31 @@ const INITIAL_PROCESS_DATA: ProcessNode = {
   ]
 };
 
+// Helper for persistence
+const usePersistentState = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] => {
+  const [state, setState] = useState<T>(() => {
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(`Error reading ${key} from localStorage`, error);
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch (error) {
+      console.error(`Error saving ${key} to localStorage`, error);
+    }
+  }, [key, state]);
+
+  return [state, setState];
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = usePersistentState('chimera_active_tab', 'dashboard');
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
   const [modules, setModules] = useState<SecurityModule[]>([
     { id: 'apparmor', name: 'AppArmor Profiles', enabled: true, status: 'active', description: '/etc/apparmor.d/usr.bin.chimera-browser enforced' },

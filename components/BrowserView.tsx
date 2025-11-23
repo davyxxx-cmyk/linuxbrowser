@@ -28,6 +28,7 @@ interface DownloadItem {
   status: 'downloading' | 'completed' | 'error';
   size: string;
   type: 'video' | 'file';
+  date: number;
 }
 
 interface SearchResult {
@@ -89,9 +90,9 @@ export const BrowserView: React.FC = () => {
   const [visitedHistory, setVisitedHistory] = usePersistentState<HistoryItem[]>('chimera_visited_history', [
     { id: 'init', title: 'New Tab', url: 'chimera://newtab', timestamp: Date.now() }
   ]);
+  const [downloads, setDownloads] = usePersistentState<DownloadItem[]>('chimera_downloads', []);
   
   // --- Ephemeral Data State ---
-  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   
   // --- Ad Blocker State (Persisted) ---
@@ -118,6 +119,35 @@ export const BrowserView: React.FC = () => {
     }
   }, [url]);
 
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + B: Toggle Bookmarks
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setShowBookmarks(prev => !prev);
+        setShowDownloads(false);
+        setShowHistory(false);
+      }
+      // Cmd/Ctrl + H: Toggle History
+      if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
+        e.preventDefault();
+        setShowHistory(prev => !prev);
+        setShowBookmarks(false);
+        setShowDownloads(false);
+      }
+      // Cmd/Ctrl + J: Toggle Downloads
+      if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+        e.preventDefault();
+        setShowDownloads(prev => !prev);
+        setShowBookmarks(false);
+        setShowHistory(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Simulate Ad Blocking increments
   useEffect(() => {
     if (!adBlockStats.enabled || !isLoading) return;
@@ -133,12 +163,12 @@ export const BrowserView: React.FC = () => {
     return () => clearInterval(interval);
   }, [isLoading, adBlockStats.enabled]);
 
-  // Simulate Downloads
+  // Simulate Download Progress
   useEffect(() => {
     const interval = setInterval(() => {
       setDownloads(prev => prev.map(dl => {
         if (dl.status === 'downloading') {
-          const newProgress = dl.progress + Math.random() * 5;
+          const newProgress = dl.progress + Math.random() * 8;
           if (newProgress >= 100) {
             return { ...dl, progress: 100, status: 'completed' };
           }
@@ -152,14 +182,14 @@ export const BrowserView: React.FC = () => {
 
   const addToHistory = (targetUrl: string, title: string) => {
     setVisitedHistory(prev => {
-        // Remove duplicate if it's the most recent one
+        // Remove duplicate if it's the most recent one to keep stack clean
         if (prev.length > 0 && prev[0].url === targetUrl) return prev;
         return [{
             id: Date.now().toString(),
             title: title || targetUrl,
             url: targetUrl,
             timestamp: Date.now()
-        }, ...prev];
+        }, ...prev].slice(0, 1000); // Limit history size
     });
   };
 
@@ -184,7 +214,7 @@ export const BrowserView: React.FC = () => {
       setUrl('chimera://newtab');
       setInputValue('');
       addToHistory('chimera://newtab', 'New Tab');
-      // Update history stack
+      
       const newHistory = history.slice(0, historyIndex + 1);
       newHistory.push('chimera://newtab');
       setHistory(newHistory);
@@ -228,17 +258,29 @@ export const BrowserView: React.FC = () => {
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
 
-    setTimeout(() => setIsLoading(false), isSearch ? 800 : 1500);
+    setTimeout(() => setIsLoading(false), isSearch ? 600 : 1200);
   };
 
   const generateMockResults = (query: string) => {
-     const mockResults: SearchResult[] = Array.from({ length: 8 }).map((_, i) => ({
-        id: i.toString(),
-        title: `${query} - Result ${i + 1} (${['Official', 'Wiki', 'News', 'Blog'][i % 4]})`,
-        url: `https://www.example.com/${query.replace(/\s+/g, '-')}/${i}`,
-        snippet: `This is a simulated search result for "${query}". Chimera Browser protects your privacy by stripping trackers from this result before you click.`,
-        ads: i < 2 // First 2 are "ads" to demonstrate blocking
-     }));
+     // Deterministic Mock Results based on query hash
+     let hash = 0;
+     for (let i = 0; i < query.length; i++) {
+        hash = ((hash << 5) - hash) + query.charCodeAt(i);
+        hash |= 0;
+     }
+     const seed = Math.abs(hash);
+
+     const mockResults: SearchResult[] = Array.from({ length: 8 }).map((_, i) => {
+        const resultSeed = seed + i;
+        const types = ['Official', 'Wiki', 'News', 'Blog'];
+        return {
+            id: i.toString(),
+            title: `${query} - Result ${i + 1} (${types[resultSeed % types.length]})`,
+            url: `https://www.example.com/${query.replace(/\s+/g, '-')}/${i}`,
+            snippet: `This is a simulated search result for "${query}". Chimera Browser protects your privacy by stripping trackers from this result before you click.`,
+            ads: (resultSeed % 4) === 0 // Deterministic ads
+        };
+     });
      setSearchResults(mockResults);
   };
 
@@ -318,7 +360,8 @@ export const BrowserView: React.FC = () => {
       progress: 0,
       status: 'downloading',
       size: type === 'video' ? '145.2 MB' : '12.5 MB',
-      type
+      type,
+      date: Date.now()
     };
     setDownloads(prev => [newDl, ...prev]);
     setShowDownloads(true);
@@ -413,7 +456,7 @@ export const BrowserView: React.FC = () => {
            <button 
               onClick={() => { setShowDownloads(!showDownloads); setShowBookmarks(false); setShowHistory(false); }}
               className={`p-2 rounded-lg transition-colors relative ${showDownloads ? 'bg-emerald-500/20 text-emerald-400' : `${textMain} hover:bg-slate-700/50`}`}
-              title="Downloads"
+              title="Downloads (Cmd+J)"
            >
               <Download size={18} />
               {downloads.some(d => d.status === 'downloading') && (
@@ -423,14 +466,14 @@ export const BrowserView: React.FC = () => {
            <button 
               onClick={() => { setShowBookmarks(!showBookmarks); setShowDownloads(false); setShowHistory(false); }}
               className={`p-2 rounded-lg transition-colors ${showBookmarks ? 'bg-emerald-500/20 text-emerald-400' : `${textMain} hover:bg-slate-700/50`}`}
-              title="Bookmarks"
+              title="Bookmarks (Cmd+B)"
            >
               <Star size={18} />
            </button>
            <button 
               onClick={() => { setShowHistory(!showHistory); setShowBookmarks(false); setShowDownloads(false); }}
               className={`p-2 rounded-lg transition-colors ${showHistory ? 'bg-emerald-500/20 text-emerald-400' : `${textMain} hover:bg-slate-700/50`}`}
-              title="History"
+              title="History (Cmd+H)"
            >
               <Clock size={18} />
            </button>
@@ -445,7 +488,7 @@ export const BrowserView: React.FC = () => {
       </div>
 
       {/* Bookmarks Bar */}
-      <div className={`flex items-center gap-1 px-3 py-1.5 border-b ${border} ${bgPanel} overflow-x-auto scrollbar-hide h-[40px]`}>
+      <div className={`flex items-center gap-1 px-3 py-1.5 border-b ${border} ${bgPanel} overflow-x-auto scrollbar-hide h-[40px] flex-shrink-0`}>
           {bookmarks.map(b => {
             const favicon = getFavicon(b.url);
             return (
@@ -686,7 +729,10 @@ export const BrowserView: React.FC = () => {
                 <h3 className={`font-bold ${textMain} flex items-center gap-2`}>
                    <Download className="text-emerald-500" size={16} /> Download Manager
                 </h3>
-                <button onClick={() => setShowDownloads(false)} className="p-1 hover:bg-red-500/20 hover:text-red-400 rounded text-slate-500"><X size={16}/></button>
+                <div className="flex gap-2">
+                   <button onClick={() => setDownloads([])} className="p-1.5 hover:bg-red-500/20 hover:text-red-400 rounded text-slate-400 flex items-center gap-1 text-xs"><Trash2 size={12}/> Clear</button>
+                   <button onClick={() => setShowDownloads(false)} className="p-1 hover:bg-red-500/20 hover:text-red-400 rounded text-slate-500"><X size={16}/></button>
+                </div>
              </div>
              
              {/* Media Grabber Tool */}
@@ -722,7 +768,10 @@ export const BrowserView: React.FC = () => {
                          </div>
                          <div className="flex-1 overflow-hidden">
                             <div className={`text-sm font-medium ${textMain} truncate`}>{dl.filename}</div>
-                            <div className="text-xs text-slate-500">{dl.size} • {dl.status}</div>
+                            <div className="text-xs text-slate-500 flex justify-between">
+                               <span>{dl.size} • {dl.status}</span>
+                               <span>{new Date(dl.date).toLocaleDateString()}</span>
+                            </div>
                          </div>
                       </div>
                       {dl.status === 'downloading' ? (
@@ -739,102 +788,102 @@ export const BrowserView: React.FC = () => {
              </div>
           </div>
         )}
-      </div>
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <div className="absolute inset-0 z-40 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-           <div className={`w-full max-w-lg ${bgPanel} rounded-xl shadow-2xl border ${border} animate-in zoom-in-95 duration-200`}>
-              <div className="p-6 border-b border-slate-700 flex justify-between items-center">
-                 <h2 className={`text-xl font-bold ${textMain} flex items-center gap-2`}>
-                    <Settings className="text-slate-400" /> Browser Settings
-                 </h2>
-                 <button onClick={() => setShowSettings(false)} className={`p-2 rounded-lg hover:bg-slate-700/50 ${textMain}`}><X size={20} /></button>
-              </div>
-              
-              <div className="p-6 space-y-6">
-                 
-                 {/* Theme Section */}
-                 <div>
-                    <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Appearance</h3>
-                    <div className="flex gap-4">
-                       <button 
-                          onClick={() => setTheme('dark')}
-                          className={`flex-1 p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${theme === 'dark' ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800'}`}
-                       >
-                          <Moon size={24} className={theme === 'dark' ? 'text-emerald-400' : 'text-slate-400'} />
-                          <span className={`text-sm font-medium ${theme === 'dark' ? 'text-emerald-400' : 'text-slate-400'}`}>Dark Mode</span>
-                       </button>
-                       <button 
-                          onClick={() => setTheme('light')}
-                          className={`flex-1 p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${theme === 'light' ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800'}`}
-                       >
-                          <Sun size={24} className={theme === 'light' ? 'text-emerald-500' : 'text-slate-400'} />
-                          <span className={`text-sm font-medium ${theme === 'light' ? 'text-emerald-500' : 'text-slate-400'}`}>Light Mode</span>
-                       </button>
-                    </div>
-                 </div>
+        {/* Settings Modal */}
+        {showSettings && (
+          <div className="absolute inset-0 z-40 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+             <div className={`w-full max-w-lg ${bgPanel} rounded-xl shadow-2xl border ${border} animate-in zoom-in-95 duration-200`}>
+                <div className="p-6 border-b border-slate-700 flex justify-between items-center">
+                   <h2 className={`text-xl font-bold ${textMain} flex items-center gap-2`}>
+                      <Settings className="text-slate-400" /> Browser Settings
+                   </h2>
+                   <button onClick={() => setShowSettings(false)} className={`p-2 rounded-lg hover:bg-slate-700/50 ${textMain}`}><X size={20} /></button>
+                </div>
+                
+                <div className="p-6 space-y-6">
+                   
+                   {/* Theme Section */}
+                   <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Appearance</h3>
+                      <div className="flex gap-4">
+                         <button 
+                            onClick={() => setTheme('dark')}
+                            className={`flex-1 p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${theme === 'dark' ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800'}`}
+                         >
+                            <Moon size={24} className={theme === 'dark' ? 'text-emerald-400' : 'text-slate-400'} />
+                            <span className={`text-sm font-medium ${theme === 'dark' ? 'text-emerald-400' : 'text-slate-400'}`}>Dark Mode</span>
+                         </button>
+                         <button 
+                            onClick={() => setTheme('light')}
+                            className={`flex-1 p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${theme === 'light' ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800'}`}
+                         >
+                            <Sun size={24} className={theme === 'light' ? 'text-emerald-500' : 'text-slate-400'} />
+                            <span className={`text-sm font-medium ${theme === 'light' ? 'text-emerald-500' : 'text-slate-400'}`}>Light Mode</span>
+                         </button>
+                      </div>
+                   </div>
 
-                 {/* AdBlock Section */}
-                 <div>
-                    <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Chimera Shield (Ad-Blocker)</h3>
-                    <div className={`p-4 rounded-xl border ${border} ${bgMain}`}>
-                       <div className="flex items-center justify-between mb-4">
-                          <div className="flex items-center gap-3">
-                             <div className={`p-2 rounded-full ${adBlockStats.enabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                                <ShieldCheck size={20} />
-                             </div>
-                             <div>
-                                <div className={`font-bold ${textMain}`}>Enhanced Tracking Protection</div>
-                                <div className="text-xs text-slate-500">Block ads, trackers, and miners</div>
-                             </div>
-                          </div>
-                          <button 
-                             onClick={() => setAdBlockStats(prev => ({ ...prev, enabled: !prev.enabled }))}
-                             className={`w-12 h-6 rounded-full relative transition-colors ${adBlockStats.enabled ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                          >
-                             <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${adBlockStats.enabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                          </button>
-                       </div>
-                       
-                       <div className="flex items-center justify-between mb-4 pt-4 border-t border-slate-700/50">
-                          <span className={`text-sm ${textMain}`}>Strict Mode (Breaks some sites)</span>
-                          <button 
-                             onClick={() => setAdBlockStats(prev => ({ ...prev, strictMode: !prev.strictMode }))}
-                             className={`w-10 h-5 rounded-full relative transition-colors ${adBlockStats.strictMode ? 'bg-purple-500' : 'bg-slate-600'}`}
-                          >
-                             <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${adBlockStats.strictMode ? 'translate-x-5' : 'translate-x-0'}`} />
-                          </button>
-                       </div>
+                   {/* AdBlock Section */}
+                   <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Chimera Shield (Ad-Blocker)</h3>
+                      <div className={`p-4 rounded-xl border ${border} ${bgMain}`}>
+                         <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                               <div className={`p-2 rounded-full ${adBlockStats.enabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
+                                  <ShieldCheck size={20} />
+                               </div>
+                               <div>
+                                  <div className={`font-bold ${textMain}`}>Enhanced Tracking Protection</div>
+                                  <div className="text-xs text-slate-500">Block ads, trackers, and miners</div>
+                               </div>
+                            </div>
+                            <button 
+                               onClick={() => setAdBlockStats(prev => ({ ...prev, enabled: !prev.enabled }))}
+                               className={`w-12 h-6 rounded-full relative transition-colors ${adBlockStats.enabled ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                            >
+                               <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${adBlockStats.enabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                            </button>
+                         </div>
+                         
+                         <div className="flex items-center justify-between mb-4 pt-4 border-t border-slate-700/50">
+                            <span className={`text-sm ${textMain}`}>Strict Mode (Breaks some sites)</span>
+                            <button 
+                               onClick={() => setAdBlockStats(prev => ({ ...prev, strictMode: !prev.strictMode }))}
+                               className={`w-10 h-5 rounded-full relative transition-colors ${adBlockStats.strictMode ? 'bg-purple-500' : 'bg-slate-600'}`}
+                            >
+                               <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${adBlockStats.strictMode ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </button>
+                         </div>
 
-                       <div className="grid grid-cols-2 gap-4">
-                          <div className="bg-slate-900/30 p-3 rounded-lg border border-slate-700/50">
-                             <div className="text-2xl font-mono font-bold text-emerald-400">{adBlockStats.totalBlocked.toLocaleString()}</div>
-                             <div className="text-xs text-slate-500">Total Threats Blocked</div>
-                          </div>
-                          <div className="bg-slate-900/30 p-3 rounded-lg border border-slate-700/50">
-                             <div className="text-2xl font-mono font-bold text-emerald-400">{adBlockStats.sessionBlocked}</div>
-                             <div className="text-xs text-slate-500">Blocked This Session</div>
-                          </div>
-                       </div>
-                    </div>
-                 </div>
+                         <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-slate-900/30 p-3 rounded-lg border border-slate-700/50">
+                               <div className="text-2xl font-mono font-bold text-emerald-400">{adBlockStats.totalBlocked.toLocaleString()}</div>
+                               <div className="text-xs text-slate-500">Total Threats Blocked</div>
+                            </div>
+                            <div className="bg-slate-900/30 p-3 rounded-lg border border-slate-700/50">
+                               <div className="text-2xl font-mono font-bold text-emerald-400">{adBlockStats.sessionBlocked}</div>
+                               <div className="text-xs text-slate-500">Blocked This Session</div>
+                            </div>
+                         </div>
+                      </div>
+                   </div>
 
-                 {/* Data Section */}
-                 <div>
-                    <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Data Management</h3>
-                    <div className="flex gap-2">
-                       <button onClick={exportBookmarks} className={`flex-1 py-2 px-4 rounded-lg border ${border} ${bgMain} hover:bg-slate-700/50 ${textMain} text-sm flex items-center justify-center gap-2`}>
-                          <FileJson size={16} /> Export Bookmarks
-                       </button>
-                       <button onClick={() => { setHistory(['chimera://newtab']); setHistoryIndex(0); setVisitedHistory([]); setUrl('chimera://newtab'); }} className={`flex-1 py-2 px-4 rounded-lg border border-red-900/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm flex items-center justify-center gap-2`}>
-                          <Trash2 size={16} /> Reset Browser
-                       </button>
-                    </div>
-                 </div>
+                   {/* Data Section */}
+                   <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase mb-3">Data Management</h3>
+                      <div className="flex gap-2">
+                         <button onClick={exportBookmarks} className={`flex-1 py-2 px-4 rounded-lg border ${border} ${bgMain} hover:bg-slate-700/50 ${textMain} text-sm flex items-center justify-center gap-2`}>
+                            <FileJson size={16} /> Export Bookmarks
+                         </button>
+                         <button onClick={() => { setHistory(['chimera://newtab']); setHistoryIndex(0); setVisitedHistory([]); setDownloads([]); setUrl('chimera://newtab'); }} className={`flex-1 py-2 px-4 rounded-lg border border-red-900/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm flex items-center justify-center gap-2`}>
+                            <Trash2 size={16} /> Reset Browser
+                         </button>
+                      </div>
+                   </div>
 
-              </div>
-           </div>
+                </div>
+             </div>
+          </div>
         )}
 
       {/* Footer Status */}
