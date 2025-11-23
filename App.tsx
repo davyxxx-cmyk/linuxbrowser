@@ -7,12 +7,14 @@ import {
   Search,
   AlertTriangle,
   Menu,
-  Activity
+  Activity,
+  Globe
 } from 'lucide-react';
 import { SecurityControls } from './components/SecurityControls';
 import { ProcessVisualizer } from './components/ProcessVisualizer';
 import { Terminal } from './components/Terminal';
 import { ResourceMonitor } from './components/ResourceMonitor';
+import { BrowserView } from './components/BrowserView';
 import { LogEntry, SecurityModule, ProcessNode } from './types';
 
 // Mock Data
@@ -50,7 +52,7 @@ export default function App() {
     { id: 'apparmor', name: 'AppArmor Profiles', enabled: true, status: 'active', description: '/etc/apparmor.d/usr.bin.chimera-browser enforced' },
     { id: 'seccomp', name: 'Seccomp-BPF', enabled: true, status: 'active', description: 'Strict syscall filtering whitelist active' },
     { id: 'bpf', name: 'eBPF LSM', enabled: true, status: 'active', description: 'Socket connect hooks attached' },
-    { id: 'netns', name: 'Network Namespaces', enabled: false, status: 'warning', description: 'Tor per-tab isolation (pending)' },
+    { id: 'netns', name: 'Network Namespaces', enabled: true, status: 'warning', description: 'Tor per-tab isolation (pending)' },
   ]);
 
   const [resourceData, setResourceData] = useState<any[]>([]);
@@ -137,6 +139,14 @@ export default function App() {
             <Activity size={18} />
             <span className="font-medium">Telemetry</span>
           </button>
+
+          <button 
+             onClick={() => setActiveTab('browser')}
+             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${activeTab === 'browser' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'hover:bg-slate-800 text-slate-400'}`}
+          >
+            <Globe size={18} />
+            <span className="font-medium">Secure Browser</span>
+          </button>
         </nav>
 
         <div className="mt-auto p-4">
@@ -157,46 +167,54 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 p-6 md:p-8 overflow-y-auto">
         
-        {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-          <div>
-            <h2 className="text-2xl font-bold text-white">System Dashboard</h2>
-            <p className="text-slate-400">Monitoring runtime integrity for PID 1240 (chimera-launcher)</p>
+        {activeTab === 'browser' ? (
+          <div className="h-[calc(100vh-8rem)]">
+            <BrowserView />
           </div>
-          <div className="flex gap-3">
-             <div className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-2">
-                <AlertTriangle size={16} className="text-amber-500" />
-                <span className="text-sm font-mono">0 THREATS</span>
-             </div>
-             <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-emerald-500/20">
-                Run Audit
-             </button>
-          </div>
-        </header>
-
-        {/* Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <SecurityControls modules={modules} toggleModule={toggleModule} />
-            <ProcessVisualizer data={INITIAL_PROCESS_DATA} />
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            <div className="lg:col-span-2">
-                 <ResourceMonitor data={resourceData} />
-            </div>
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700 shadow-lg flex flex-col justify-center items-center text-center">
-                 <div className="w-32 h-32 rounded-full border-4 border-emerald-500/30 flex items-center justify-center mb-4 relative">
-                    <div className="absolute inset-0 rounded-full border-t-4 border-emerald-500 animate-spin"></div>
-                    <span className="text-3xl font-bold text-white">100%</span>
+        ) : (
+          <>
+            {/* Header */}
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl font-bold text-white">System Dashboard</h2>
+                <p className="text-slate-400">Monitoring runtime integrity for PID 1240 (chimera-launcher)</p>
+              </div>
+              <div className="flex gap-3">
+                 <div className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-amber-500" />
+                    <span className="text-sm font-mono">0 THREATS</span>
                  </div>
-                 <h3 className="text-lg font-semibold text-white">Integrity Score</h3>
-                 <p className="text-sm text-slate-400 mt-2">All kernel hooks verified.</p>
-                 <p className="text-sm text-slate-400">AppArmor enforcing mode.</p>
-            </div>
-        </div>
+                 <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-emerald-500/20">
+                    Run Audit
+                 </button>
+              </div>
+            </header>
 
-        {/* Terminal */}
-        <Terminal logs={logs} />
+            {/* Content Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <SecurityControls modules={modules} toggleModule={toggleModule} />
+                <ProcessVisualizer data={INITIAL_PROCESS_DATA} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                <div className="lg:col-span-2">
+                     <ResourceMonitor data={resourceData} />
+                </div>
+                <div className="bg-slate-800 rounded-xl p-6 border border-slate-700 shadow-lg flex flex-col justify-center items-center text-center">
+                     <div className="w-32 h-32 rounded-full border-4 border-emerald-500/30 flex items-center justify-center mb-4 relative">
+                        <div className="absolute inset-0 rounded-full border-t-4 border-emerald-500 animate-spin"></div>
+                        <span className="text-3xl font-bold text-white">100%</span>
+                     </div>
+                     <h3 className="text-lg font-semibold text-white">Integrity Score</h3>
+                     <p className="text-sm text-slate-400 mt-2">All kernel hooks verified.</p>
+                     <p className="text-sm text-slate-400">AppArmor enforcing mode.</p>
+                </div>
+            </div>
+
+            {/* Terminal */}
+            <Terminal logs={logs} />
+          </>
+        )}
       </main>
     </div>
   );
