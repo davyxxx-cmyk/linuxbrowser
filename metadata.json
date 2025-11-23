@@ -1,0 +1,5 @@
+{
+  "name": "Chimera WebUI",
+  "description": "A cybersecurity dashboard and visualizer for the Chimera hardened browser system, displaying sandbox status, process hierarchy, and security telemetry.",
+  "requestFramePermissions": []
+}
