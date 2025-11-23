@@ -4,7 +4,7 @@ import {
   Star, Download, Settings, Moon, Sun, X, FileJson, Upload, 
   Trash2, PlayCircle, HardDrive, ShieldAlert, Zap, Search,
   ExternalLink, Plus, AlertOctagon, Smartphone, Cpu, Clock,
-  Layout
+  Layout, Wifi, ArrowUp, ArrowDown
 } from 'lucide-react';
 
 interface Bookmark {
@@ -62,6 +62,12 @@ const usePersistentState = <T,>(key: string, initialValue: T): [T, React.Dispatc
   return [state, setState];
 };
 
+const formatSpeed = (bytes: number) => {
+  if (bytes < 1024) return `${bytes.toFixed(0)} B/s`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB/s`;
+};
+
 export const BrowserView: React.FC = () => {
   // --- Core Browser State (Persisted) ---
   const [url, setUrl] = usePersistentState<string>('chimera_url', 'chimera://newtab');
@@ -101,6 +107,33 @@ export const BrowserView: React.FC = () => {
   // --- Media Grabber State ---
   const [mediaUrl, setMediaUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Network Stats Simulation ---
+  const [netSpeed, setNetSpeed] = useState({ down: 0, up: 0 });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Base traffic (idle chatter)
+      let d = Math.random() * 2000; // 0-2 KB/s
+      let u = Math.random() * 500;  // 0-0.5 KB/s
+
+      // Loading page spikes
+      if (isLoading) {
+        d += Math.random() * 8 * 1024 * 1024; // 0-8 MB/s
+        u += Math.random() * 200 * 1024;      // 0-200 KB/s
+      }
+
+      // Active downloads (huge spike)
+      const activeDownloads = downloads.filter(dl => dl.status === 'downloading').length;
+      if (activeDownloads > 0) {
+        d += activeDownloads * (15 + Math.random() * 25) * 1024 * 1024; // 15-40 MB/s per file
+        u += activeDownloads * (50 + Math.random() * 50) * 1024;        // ACK packets
+      }
+
+      setNetSpeed({ down: d, up: u });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isLoading, downloads]);
 
   // Sync internalPage and inputValue with URL on mount/update
   useEffect(() => {
@@ -888,12 +921,28 @@ export const BrowserView: React.FC = () => {
 
       {/* Footer Status */}
       <div className={`${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-100'} border-t ${border} px-4 py-1.5 flex justify-between items-center text-[10px] text-slate-500 font-mono transition-colors duration-300`}>
-         <div className="flex gap-4">
+         <div className="flex-1 flex gap-4">
              <span className="flex items-center gap-1"><Zap size={10} className="text-yellow-500"/> Speed: Optimized</span>
              <span className="flex items-center gap-1"><HardDrive size={10} className="text-blue-500"/> Cache: Encrypted</span>
              <span className="flex items-center gap-1"><Cpu size={10} className="text-purple-500"/> GPU: Isolated</span>
          </div>
-         <div className="flex gap-4">
+         
+         <div className="flex-none mx-4">
+            <div className={`flex items-center gap-3 px-3 py-0.5 rounded-full border ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-300'} shadow-sm`}>
+                <Wifi size={12} className={`${netSpeed.down > 1024 * 1024 ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}`} />
+                <div className="flex items-center gap-1.5 min-w-[60px]">
+                    <ArrowDown size={10} className={netSpeed.down > 0 ? 'text-emerald-500' : 'text-slate-400'} />
+                    <span className={`font-mono ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{formatSpeed(netSpeed.down)}</span>
+                </div>
+                <div className={`w-px h-3 ${theme === 'dark' ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
+                <div className="flex items-center gap-1.5 min-w-[60px]">
+                    <ArrowUp size={10} className={netSpeed.up > 0 ? 'text-blue-500' : 'text-slate-400'} />
+                    <span className={`font-mono ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{formatSpeed(netSpeed.up)}</span>
+                </div>
+            </div>
+         </div>
+
+         <div className="flex-1 flex justify-end gap-4">
              <span className={`flex items-center gap-1.5 ${adBlockStats.enabled ? 'text-emerald-500' : 'text-red-500'}`}>
                  <span className={`w-1.5 h-1.5 rounded-full ${adBlockStats.enabled ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
                  AdBlock: {adBlockStats.enabled ? 'ON' : 'OFF'}
