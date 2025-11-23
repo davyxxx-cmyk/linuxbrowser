@@ -3,7 +3,8 @@ import {
   ArrowLeft, ArrowRight, RotateCw, Lock, ShieldCheck, Globe, 
   Star, Download, Settings, Moon, Sun, X, FileJson, Upload, 
   Trash2, PlayCircle, HardDrive, ShieldAlert, Zap, Search,
-  ExternalLink, Plus, AlertOctagon, Smartphone, Cpu, Clock
+  ExternalLink, Plus, AlertOctagon, Smartphone, Cpu, Clock,
+  Layout
 } from 'lucide-react';
 
 interface Bookmark {
@@ -37,41 +38,85 @@ interface SearchResult {
   ads: boolean;
 }
 
+// Helper to safely access localStorage
+const usePersistentState = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] => {
+  const [state, setState] = useState<T>(() => {
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(`Error reading ${key} from localStorage`, error);
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch (error) {
+      console.error(`Error saving ${key} to localStorage`, error);
+    }
+  }, [key, state]);
+
+  return [state, setState];
+};
+
 export const BrowserView: React.FC = () => {
-  // --- Core Browser State ---
-  const [url, setUrl] = useState('chimera://newtab');
+  // --- Core Browser State (Persisted) ---
+  const [url, setUrl] = usePersistentState<string>('chimera_url', 'chimera://newtab');
+  const [history, setHistory] = usePersistentState<string[]>('chimera_history_stack', ['chimera://newtab']);
+  const [historyIndex, setHistoryIndex] = usePersistentState<number>('chimera_history_index', 0);
+  
+  // Internal UI state (not persisted)
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [history, setHistory] = useState<string[]>(['chimera://newtab']);
-  const [historyIndex, setHistoryIndex] = useState(0);
   const [internalPage, setInternalPage] = useState<'newtab' | 'search' | 'external'>('newtab');
   const [searchQuery, setSearchQuery] = useState('');
 
   // --- Feature State ---
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = usePersistentState<'dark' | 'light'>('chimera_theme', 'dark');
   const [showSettings, setShowSettings] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showDownloads, setShowDownloads] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   
-  // --- Data State ---
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([
+  // --- Data State (Persisted) ---
+  const [bookmarks, setBookmarks] = usePersistentState<Bookmark[]>('chimera_bookmarks', [
     { id: '1', title: 'Wikipedia', url: 'https://www.wikipedia.org', createdAt: Date.now() },
     { id: '2', title: 'Hacker News', url: 'https://news.ycombinator.com', createdAt: Date.now() },
     { id: '3', title: 'EFF', url: 'https://www.eff.org', createdAt: Date.now() }
   ]);
-  const [visitedHistory, setVisitedHistory] = useState<HistoryItem[]>([
+  const [visitedHistory, setVisitedHistory] = usePersistentState<HistoryItem[]>('chimera_visited_history', [
     { id: 'init', title: 'New Tab', url: 'chimera://newtab', timestamp: Date.now() }
   ]);
+  
+  // --- Ephemeral Data State ---
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   
-  // --- Ad Blocker State ---
-  const [adBlockStats, setAdBlockStats] = useState({ enabled: true, totalBlocked: 1420, sessionBlocked: 0, strictMode: false });
+  // --- Ad Blocker State (Persisted) ---
+  const [adBlockStats, setAdBlockStats] = usePersistentState('chimera_adblock', { enabled: true, totalBlocked: 1420, sessionBlocked: 0, strictMode: false });
   
   // --- Media Grabber State ---
   const [mediaUrl, setMediaUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync internalPage and inputValue with URL on mount/update
+  useEffect(() => {
+    setInputValue(url);
+    if (url === 'chimera://newtab') {
+      setInternalPage('newtab');
+      setInputValue('');
+    } else if (url.startsWith('chimera://search')) {
+      setInternalPage('search');
+      const q = decodeURIComponent(url.split('q=')[1] || '');
+      setSearchQuery(q);
+      setInputValue(q);
+      if (searchResults.length === 0) generateMockResults(q);
+    } else {
+      setInternalPage('external');
+    }
+  }, [url]);
 
   // Simulate Ad Blocking increments
   useEffect(() => {
@@ -118,17 +163,32 @@ export const BrowserView: React.FC = () => {
     });
   };
 
+  const getFavicon = (targetUrl: string) => {
+    if (targetUrl.startsWith('chimera://')) return null;
+    try {
+      const domain = new URL(targetUrl).hostname;
+      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+    } catch {
+      return null;
+    }
+  };
+
   // --- Navigation Logic ---
   const navigate = (input: string) => {
     let target = input.trim();
     let isSearch = false;
 
     // Handle internal protocols
-    if (target === 'chimera://newtab') {
+    if (target === 'chimera://newtab' || target === '') {
       setInternalPage('newtab');
       setUrl('chimera://newtab');
       setInputValue('');
       addToHistory('chimera://newtab', 'New Tab');
+      // Update history stack
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push('chimera://newtab');
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
       return;
     }
 
@@ -145,28 +205,26 @@ export const BrowserView: React.FC = () => {
     setIsLoading(true);
     setAdBlockStats(prev => ({ ...prev, sessionBlocked: 0 }));
 
+    let finalUrl = target;
+
     if (isSearch) {
-       // Internal Search Engine
        setInternalPage('search');
        setSearchQuery(target);
-       const searchUrl = `chimera://search?q=${encodeURIComponent(target)}`;
-       setUrl(searchUrl);
-       setInputValue(target);
+       finalUrl = `chimera://search?q=${encodeURIComponent(target)}`;
        generateMockResults(target);
-       addToHistory(searchUrl, `Search: ${target}`);
+       addToHistory(finalUrl, `Search: ${target}`);
     } else {
-       // External Iframe
        setInternalPage('external');
-       setUrl(target);
-       setInputValue(target);
        let hostname = target;
        try { hostname = new URL(target).hostname; } catch(e) {}
        addToHistory(target, hostname);
     }
 
+    setUrl(finalUrl);
+    
     // History management (Back/Forward stack)
     const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(isSearch ? `chimera://search?q=${encodeURIComponent(target)}` : target);
+    newHistory.push(finalUrl);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
 
@@ -188,24 +246,16 @@ export const BrowserView: React.FC = () => {
      if (historyIndex > 0) {
         const prevUrl = history[historyIndex - 1];
         setHistoryIndex(historyIndex - 1);
-        // Restore state based on URL
-        if (prevUrl === 'chimera://newtab') {
-           setInternalPage('newtab');
-           setUrl(prevUrl);
-           setInputValue('');
-        } else if (prevUrl.startsWith('chimera://search')) {
-           setInternalPage('search');
-           setUrl(prevUrl);
-           const q = decodeURIComponent(prevUrl.split('=')[1]);
-           setInputValue(q);
-           setSearchQuery(q);
-           generateMockResults(q);
-        } else {
-           setInternalPage('external');
-           setUrl(prevUrl);
-           setInputValue(prevUrl);
-        }
+        setUrl(prevUrl);
      }
+  };
+
+  const handleForward = () => {
+    if (historyIndex < history.length - 1) {
+        const nextUrl = history[historyIndex + 1];
+        setHistoryIndex(historyIndex + 1);
+        setUrl(nextUrl);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -219,9 +269,16 @@ export const BrowserView: React.FC = () => {
     if (exists) {
       setBookmarks(prev => prev.filter(b => b.url !== url));
     } else {
+      let title = url;
+      if (internalPage === 'search') title = `Search: ${searchQuery}`;
+      else if (internalPage === 'newtab') title = 'New Tab';
+      else {
+         try { title = new URL(url).hostname; } catch {}
+      }
+      
       setBookmarks(prev => [...prev, {
         id: Date.now().toString(),
-        title: internalPage === 'search' ? `Search: ${searchQuery}` : new URL(url).hostname,
+        title: title,
         url: url,
         createdAt: Date.now()
       }]);
@@ -297,6 +354,13 @@ export const BrowserView: React.FC = () => {
             <ArrowLeft size={18} />
           </button>
           <button 
+             onClick={handleForward}
+             disabled={historyIndex >= history.length - 1}
+             className={`p-2 hover:bg-slate-700/50 disabled:opacity-30 rounded-lg transition-colors ${textMain}`}
+          >
+             <ArrowRight size={18} />
+          </button>
+          <button 
             onClick={() => setIsLoading(true)}
             className={`p-2 hover:bg-slate-700/50 rounded-lg transition-colors ${textMain} ${isLoading ? 'animate-spin' : ''}`}
           >
@@ -323,6 +387,7 @@ export const BrowserView: React.FC = () => {
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
+            onFocus={(e) => e.target.select()}
             className={`w-full ${inputBg} border ${border} group-focus-within:border-emerald-500/50 rounded-lg py-2 pl-9 pr-36 text-sm ${textMain} focus:outline-none font-mono transition-all placeholder:text-slate-600`}
             placeholder="Search or enter address"
           />
@@ -380,20 +445,29 @@ export const BrowserView: React.FC = () => {
       </div>
 
       {/* Bookmarks Bar */}
-      <div className={`flex items-center gap-1 px-3 py-1 border-b ${border} ${bgPanel} overflow-x-auto scrollbar-hide h-[36px]`}>
-          {bookmarks.map(b => (
-            <button 
-                key={b.id} 
-                onClick={() => navigate(b.url)}
-                className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-700/50 ${textMain} text-xs transition-colors group`}
-                title={b.title}
-            >
-                <Globe size={12} className={`${textMuted} group-hover:text-emerald-400`} />
-                <span className="max-w-[150px] truncate font-medium">{b.title}</span>
-            </button>
-          ))}
+      <div className={`flex items-center gap-1 px-3 py-1.5 border-b ${border} ${bgPanel} overflow-x-auto scrollbar-hide h-[40px]`}>
+          {bookmarks.map(b => {
+            const favicon = getFavicon(b.url);
+            return (
+              <button 
+                  key={b.id} 
+                  onClick={() => navigate(b.url)}
+                  className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-700/50 ${textMain} text-xs transition-colors group flex-shrink-0 max-w-[200px] border border-transparent hover:border-slate-600/50`}
+                  title={b.title}
+              >
+                  {favicon ? (
+                     <img src={favicon} alt="" className="w-3.5 h-3.5 rounded-sm opacity-80 group-hover:opacity-100" />
+                  ) : (
+                     <Globe size={14} className={`${textMuted} group-hover:text-emerald-400`} />
+                  )}
+                  <span className="truncate font-medium">{b.title}</span>
+              </button>
+            );
+          })}
           {bookmarks.length === 0 && (
-             <span className={`text-[10px] ${textMuted} px-1`}>Bookmarks bar</span>
+             <span className={`text-[10px] ${textMuted} px-1 italic flex items-center gap-2`}>
+                <Star size={10} /> bookmarks bar
+             </span>
           )}
       </div>
 
@@ -406,7 +480,7 @@ export const BrowserView: React.FC = () => {
         {/* Internal Page: New Tab */}
         {internalPage === 'newtab' && (
            <div className="flex flex-col items-center justify-center h-full p-8 animate-in fade-in duration-300">
-               <div className="w-24 h-24 bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl shadow-2xl flex items-center justify-center mb-8">
+               <div className="w-24 h-24 bg-gradient-to-br from-emerald-500 to-teal-700 rounded-2xl shadow-2xl flex items-center justify-center mb-8 ring-4 ring-emerald-500/10">
                    <ShieldCheck size={48} className="text-white" />
                </div>
                <h1 className={`text-4xl font-bold mb-8 ${textMain} tracking-tight`}>Chimera Browser</h1>
@@ -421,7 +495,7 @@ export const BrowserView: React.FC = () => {
                           placeholder="Search the web securely..."
                           className={`flex-1 bg-transparent border-none focus:ring-0 p-4 text-lg ${textMain} placeholder:text-slate-600`}
                        />
-                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-medium transition-colors">
+                       <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-lg shadow-emerald-600/20">
                            Search
                        </button>
                    </div>
@@ -430,12 +504,17 @@ export const BrowserView: React.FC = () => {
                {/* Speed Dials */}
                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-4xl">
                    {bookmarks.slice(0, 4).map(b => (
-                       <button key={b.id} onClick={() => navigate(b.url)} className={`p-4 rounded-xl ${bgPanel} border ${border} hover:border-emerald-500/50 transition-all group text-left`}>
+                       <button key={b.id} onClick={() => navigate(b.url)} className={`p-4 rounded-xl ${bgPanel} border ${border} hover:border-emerald-500/50 transition-all group text-left relative overflow-hidden`}>
+                           <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-emerald-500/10 to-transparent rounded-bl-full -mr-8 -mt-8 group-hover:from-emerald-500/20 transition-all"></div>
                            <div className="w-10 h-10 rounded-full bg-slate-700/50 flex items-center justify-center mb-3 group-hover:bg-emerald-500/20 group-hover:text-emerald-400 transition-colors">
-                               <Globe size={20} className={textMuted} />
+                               {getFavicon(b.url) ? (
+                                   <img src={getFavicon(b.url)!} alt="" className="w-5 h-5" />
+                               ) : (
+                                   <Globe size={20} className={textMuted} />
+                               )}
                            </div>
                            <div className={`font-medium ${textMain} truncate`}>{b.title}</div>
-                           <div className="text-xs text-slate-500 truncate">{new URL(b.url).hostname}</div>
+                           <div className="text-xs text-slate-500 truncate">{b.url.replace('https://', '')}</div>
                        </button>
                    ))}
                </div>
@@ -455,23 +534,23 @@ export const BrowserView: React.FC = () => {
                  </div>
 
                  {searchResults.map((result) => (
-                    <div key={result.id} className={`p-4 rounded-xl border ${border} ${bgPanel} transition-all relative overflow-hidden`}>
+                    <div key={result.id} className={`p-4 rounded-xl border ${border} ${bgPanel} transition-all relative overflow-hidden group hover:border-slate-600`}>
                         {result.ads && adBlockStats.enabled ? (
-                            <div className="flex items-center justify-between text-slate-500 italic text-sm bg-red-500/5 p-2 rounded -mx-2 -my-2">
+                            <div className="flex items-center justify-between text-slate-500 italic text-sm bg-red-500/5 p-2 rounded -mx-2 -my-2 border border-red-500/10">
                                 <span className="flex items-center gap-2"><AlertOctagon size={14} className="text-red-400"/> Ad blocked by Chimera Shield</span>
-                                <button className="text-xs hover:text-slate-300">Show anyway</button>
+                                <button className="text-xs hover:text-slate-300 underline decoration-dotted">Show anyway</button>
                             </div>
                         ) : (
                             <>
                                 <div className="flex items-center gap-2 mb-1">
-                                    <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-[10px] text-white font-bold">
-                                        {result.url[12].toUpperCase()}
+                                    <div className="w-6 h-6 rounded-full bg-slate-700/50 flex items-center justify-center text-[10px] text-white font-bold border border-slate-600">
+                                        {result.url.includes('example') ? 'E' : result.url[8].toUpperCase()}
                                     </div>
                                     <div className="text-xs text-slate-500 truncate">{result.url}</div>
                                 </div>
                                 <h3 
                                     onClick={() => navigate(result.url)}
-                                    className={`text-xl font-medium ${theme === 'dark' ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'} cursor-pointer mb-2`}
+                                    className={`text-xl font-medium ${theme === 'dark' ? 'text-blue-400 group-hover:text-blue-300' : 'text-blue-600 group-hover:text-blue-700'} cursor-pointer mb-2`}
                                 >
                                     {result.title}
                                 </h3>
@@ -492,9 +571,21 @@ export const BrowserView: React.FC = () => {
                  {/* Iframe Fallback/Simulation Message */}
                  <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-900 pointer-events-none z-0">
                      <div className="text-center p-8">
-                         <Globe className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                         <h3 className="font-bold text-xl">Preview Mode</h3>
-                         <p className="text-slate-500 mt-2">External content is simulated for security in this demo.</p>
+                         <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center mx-auto mb-6">
+                             <Globe className="w-10 h-10 text-slate-400" />
+                         </div>
+                         <h3 className="font-bold text-2xl text-slate-700">Preview Mode</h3>
+                         <p className="text-slate-500 mt-2 max-w-md mx-auto">
+                           You are viewing <strong>{url}</strong> in a secure sandboxed environment.
+                         </p>
+                         <div className="mt-8 flex gap-4 justify-center">
+                             <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-slate-200/50 px-3 py-2 rounded">
+                                <ShieldCheck size={14}/> TLS 1.3
+                             </div>
+                             <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-slate-200/50 px-3 py-2 rounded">
+                                <Lock size={14}/> AES-256
+                             </div>
+                         </div>
                      </div>
                  </div>
                  <iframe
@@ -527,14 +618,19 @@ export const BrowserView: React.FC = () => {
              </div>
              <div className="flex-1 overflow-y-auto p-2 space-y-1">
                 {bookmarks.map(b => (
-                   <div key={b.id} className="group flex items-center justify-between p-2 hover:bg-slate-700/30 rounded-lg cursor-pointer">
-                      <div onClick={() => navigate(b.url)} className="flex-1 overflow-hidden">
-                         <div className={`text-sm font-medium ${textMain} truncate`}>{b.title}</div>
-                         <div className="text-xs text-slate-500 truncate">{b.url}</div>
+                   <div key={b.id} className="group flex items-center justify-between p-2 hover:bg-slate-700/30 rounded-lg cursor-pointer transition-colors">
+                      <div onClick={() => navigate(b.url)} className="flex items-center gap-3 flex-1 overflow-hidden">
+                         <div className="w-8 h-8 rounded bg-slate-700/50 flex items-center justify-center flex-shrink-0">
+                           {getFavicon(b.url) ? <img src={getFavicon(b.url)!} className="w-4 h-4"/> : <Globe size={14} className={textMuted}/>}
+                         </div>
+                         <div className="overflow-hidden">
+                             <div className={`text-sm font-medium ${textMain} truncate`}>{b.title}</div>
+                             <div className="text-xs text-slate-500 truncate">{b.url}</div>
+                         </div>
                       </div>
                       <button 
                          onClick={(e) => { e.stopPropagation(); setBookmarks(prev => prev.filter(x => x.id !== b.id)); }}
-                         className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-red-400 rounded transition-all"
+                         className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-red-400 rounded transition-all"
                       >
                          <Trash2 size={14} />
                       </button>
@@ -564,15 +660,17 @@ export const BrowserView: React.FC = () => {
              </div>
              <div className="flex-1 overflow-y-auto p-2 space-y-1">
                 {visitedHistory.length === 0 && (
-                  <div className="text-center py-8 text-slate-500 text-sm italic">
-                    No history yet.
+                  <div className="text-center py-12 flex flex-col items-center">
+                    <Clock size={32} className="text-slate-600 mb-2 opacity-50"/>
+                    <div className="text-slate-500 text-sm italic">No history yet.</div>
                   </div>
                 )}
                 {visitedHistory.map(item => (
-                   <div key={item.id} className="group flex flex-col p-3 hover:bg-slate-700/30 rounded-lg cursor-pointer border-b border-slate-700/30 last:border-0" onClick={() => navigate(item.url)}>
+                   <div key={item.id} className="group flex flex-col p-3 hover:bg-slate-700/30 rounded-lg cursor-pointer border-b border-slate-700/30 last:border-0 transition-colors" onClick={() => navigate(item.url)}>
                       <div className={`text-sm font-medium ${textMain} truncate`}>{item.title}</div>
                       <div className="text-xs text-slate-500 truncate mb-1">{item.url}</div>
-                      <div className="text-[10px] text-slate-600 font-mono">
+                      <div className="text-[10px] text-slate-600 font-mono flex items-center gap-1">
+                        <Clock size={8}/>
                         {new Date(item.timestamp).toLocaleTimeString()}
                       </div>
                    </div>
@@ -611,7 +709,10 @@ export const BrowserView: React.FC = () => {
 
              <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {downloads.length === 0 && (
-                   <div className="text-center py-10 text-slate-500 text-sm">No downloads yet.</div>
+                   <div className="text-center py-10 text-slate-500 text-sm flex flex-col items-center">
+                     <HardDrive size={32} className="text-slate-600 mb-2 opacity-50"/>
+                     No downloads active.
+                   </div>
                 )}
                 {downloads.map(dl => (
                    <div key={dl.id} className={`p-3 rounded-lg border ${border} ${bgMain}`}>
@@ -629,8 +730,8 @@ export const BrowserView: React.FC = () => {
                             <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${dl.progress}%` }}></div>
                          </div>
                       ) : (
-                         <button className="w-full text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 py-1 rounded transition-colors">
-                            Open File
+                         <button className="w-full text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 py-1 rounded transition-colors flex items-center justify-center gap-2">
+                            <Layout size={12}/> Open File
                          </button>
                       )}
                    </div>
@@ -726,8 +827,8 @@ export const BrowserView: React.FC = () => {
                        <button onClick={exportBookmarks} className={`flex-1 py-2 px-4 rounded-lg border ${border} ${bgMain} hover:bg-slate-700/50 ${textMain} text-sm flex items-center justify-center gap-2`}>
                           <FileJson size={16} /> Export Bookmarks
                        </button>
-                       <button onClick={() => { setHistory(['chimera://newtab']); setHistoryIndex(0); setVisitedHistory([]); }} className={`flex-1 py-2 px-4 rounded-lg border border-red-900/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm flex items-center justify-center gap-2`}>
-                          <Trash2 size={16} /> Clear History
+                       <button onClick={() => { setHistory(['chimera://newtab']); setHistoryIndex(0); setVisitedHistory([]); setUrl('chimera://newtab'); }} className={`flex-1 py-2 px-4 rounded-lg border border-red-900/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm flex items-center justify-center gap-2`}>
+                          <Trash2 size={16} /> Reset Browser
                        </button>
                     </div>
                  </div>
